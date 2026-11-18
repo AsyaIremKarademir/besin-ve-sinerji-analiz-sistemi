@@ -1,0 +1,37 @@
+# --- Gizli ayarlar ve API anahtarları (NFR-3) ---
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+
+# --- Yerel veri tabanı ve kullanıcı verileri (NFR-2) ---
+# Seed verileri (data/seed/) depoda tutulur; üretilen veri tabanı ve dışa aktarımlar tutulmaz.
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+data/exports/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# --- Sanal ortam ---
+.venv/
+venv/
+env/
+
+# --- Test ve kapsam çıktıları ---
+.pytest_cache/
+.coverage
+htmlcov/
+
+# --- Editör ve işletim sistemi ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+~$*
