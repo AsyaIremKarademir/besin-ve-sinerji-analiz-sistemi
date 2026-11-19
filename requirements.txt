@@ -1,0 +1,6 @@
+# Uygulama bağımlılıkları
+# Kurulum: pip install -r requirements.txt
+# Not: sqlite3 Python'un standart kütüphanesinde bulunur, ayrıca kurulmaz.
+
+streamlit>=1.40,<2.0      # Sunum katmanı: profil formu, sohbet arayüzü
+python-dotenv>=1.0,<2.0   # .env dosyasından gizli ayarları okuma (NFR-3)
