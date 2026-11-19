@@ -19,3 +19,15 @@ def clean_env(monkeypatch, tmp_path):
     for name in _APP_ENV_VARS:
         monkeypatch.delenv(name, raising=False)
     return tmp_path / "olmayan.env"
+
+
+@pytest.fixture
+def db():
+    """Şeması kurulmuş, bellekte çalışan boş bir veri tabanı bağlantısı."""
+    from besin_sinerji.data.db import MEMORY_DB, connect
+    from besin_sinerji.data.schema import create_schema
+
+    conn = connect(MEMORY_DB)
+    create_schema(conn)
+    yield conn
+    conn.close()
