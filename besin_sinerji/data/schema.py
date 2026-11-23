@@ -65,6 +65,10 @@ HEIGHT_CM_RANGE = (100.0, 250.0)
 WEIGHT_KG_RANGE = (30.0, 300.0)
 HEALTH_CONTEXT_MAX_LENGTH = 200
 
+MEAL_TIMES = ("breakfast", "lunch", "dinner", "snack", "unknown")
+PORTION_STATUSES = ("given", "estimated", "unknown")
+MEAL_TEXT_MAX_LENGTH = 1000
+
 
 def _sql_list(values: tuple[str, ...]) -> str:
     """Sabit değer listesini CHECK kısıtı için SQL biçimine çevirir."""
@@ -158,8 +162,57 @@ BEGIN
 END;
 """
 
+MEAL_TABLES = f"""
+CREATE TABLE IF NOT EXISTS Meal (
+    meal_id         INTEGER PRIMARY KEY,
+    -- Profil isteğe bağlıdır (rapor 6.1, adım 1). Profil silinince öğün geçmişi de
+    -- silinir; sağlıkla ilişkili veriler sahipsiz biçimde saklanmaz (NFR-2, rapor 5.5).
+    user_id         INTEGER REFERENCES UserProfile(user_id) ON DELETE CASCADE,
+    raw_text        TEXT    NOT NULL
+                            CHECK (length(trim(raw_text)) BETWEEN 1 AND {MEAL_TEXT_MAX_LENGTH}),
+    meal_time       TEXT    NOT NULL DEFAULT 'unknown'
+                            CHECK (meal_time IN ({_sql_list(MEAL_TIMES)})),
+    created_at      TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS MealItem (
+    meal_item_id      INTEGER PRIMARY KEY,
+    meal_id           INTEGER NOT NULL REFERENCES Meal(meal_id) ON DELETE CASCADE,
+    -- Geçmişte kullanılmış bir gıda silinemez; aksi halde eski analizler izlenemez (NFR-1).
+    food_id           INTEGER NOT NULL REFERENCES Food(food_id) ON DELETE RESTRICT,
+    matched_text      TEXT    NOT NULL,         -- metindeki orijinal ifade, örn. '1 kase mercimek'
+    amount_g          REAL    CHECK (amount_g IS NULL OR amount_g > 0),
+    portion_status    TEXT    NOT NULL CHECK (portion_status IN ({_sql_list(PORTION_STATUSES)})),
+    portion_note      TEXT,                     -- örn. '1 kase ≈ 200 g varsayımı'
+    match_confidence  REAL    NOT NULL CHECK (match_confidence BETWEEN 0 AND 1),
+    confirmed_by_user INTEGER NOT NULL DEFAULT 0 CHECK (confirmed_by_user IN (0, 1)),
+    -- Miktarı bilinmeyen kalem için gram uydurulmaz (rapor 5.2, senaryo D).
+    CHECK ((portion_status = 'unknown') = (amount_g IS NULL))
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS AnalysisResult (
+    result_id        INTEGER PRIMARY KEY,
+    meal_id          INTEGER NOT NULL REFERENCES Meal(meal_id) ON DELETE CASCADE,
+    -- Analiz anında kullanıcıya gösterilenin değişmez anlık görüntüsü (JSON).
+    -- Kurallar veya besin değerleri sonradan güncellense bile eski yanıtın hangi
+    -- verilerle üretildiği izlenebilir kalır (NFR-1).
+    nutrient_summary TEXT    NOT NULL CHECK (CASE WHEN json_valid(nutrient_summary)
+                                  THEN json_type(nutrient_summary) = 'object' ELSE 0 END),
+    triggered_rules  TEXT    NOT NULL DEFAULT '[]'
+                             CHECK (CASE WHEN json_valid(triggered_rules)
+                                  THEN json_type(triggered_rules) = 'array' ELSE 0 END),
+    response_text    TEXT    NOT NULL CHECK (length(trim(response_text)) > 0),
+    created_at       TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_meal_user_created ON Meal(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_meal_item_meal ON MealItem(meal_id);
+CREATE INDEX IF NOT EXISTS idx_meal_item_food ON MealItem(food_id);
+CREATE INDEX IF NOT EXISTS idx_analysis_result_meal ON AnalysisResult(meal_id);
+"""
+
 # Sonraki adımlarda eklenecek tablo grupları bu listeye sırayla eklenir.
-SCHEMA_PARTS: tuple[str, ...] = (FOOD_TABLES, PROFILE_TABLES)
+SCHEMA_PARTS: tuple[str, ...] = (FOOD_TABLES, PROFILE_TABLES, MEAL_TABLES)
 
 
 def create_schema(conn: sqlite3.Connection) -> None:
