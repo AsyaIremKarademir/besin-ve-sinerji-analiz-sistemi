@@ -69,6 +69,12 @@ MEAL_TIMES = ("breakfast", "lunch", "dinner", "snack", "unknown")
 PORTION_STATUSES = ("given", "estimated", "unknown")
 MEAL_TEXT_MAX_LENGTH = 1000
 
+SOURCE_TYPES = ("fact_sheet", "journal_article", "database", "guideline", "product")
+RULE_DIRECTIONS = ("supportive", "reducing", "conditional", "context", "caution")
+RULE_SCOPES = ("meal", "diet", "supplement")
+EVIDENCE_LEVELS = ("well_supported", "conditional", "limited")
+RULE_STATUSES = ("review", "active", "retired")
+
 
 def _sql_list(values: tuple[str, ...]) -> str:
     """Sabit değer listesini CHECK kısıtı için SQL biçimine çevirir."""
@@ -211,8 +217,80 @@ CREATE INDEX IF NOT EXISTS idx_meal_item_food ON MealItem(food_id);
 CREATE INDEX IF NOT EXISTS idx_analysis_result_meal ON AnalysisResult(meal_id);
 """
 
+RULE_TABLES = f"""
+CREATE TABLE IF NOT EXISTS Source (
+    source_id       INTEGER PRIMARY KEY,
+    ref_key         TEXT    NOT NULL UNIQUE,
+    title           TEXT    NOT NULL,
+    authors         TEXT,
+    publisher       TEXT,
+    year            INTEGER CHECK (year IS NULL OR year BETWEEN 1900 AND 2100),
+    url             TEXT    CHECK (url IS NULL OR url LIKE 'http%'),
+    doi             TEXT,
+    source_type     TEXT    NOT NULL CHECK (source_type IN ({_sql_list(SOURCE_TYPES)})),
+    accessed_at     TEXT,
+    CHECK (url IS NOT NULL OR doi IS NOT NULL)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS InteractionRule (
+    rule_id           TEXT    PRIMARY KEY CHECK (rule_id GLOB 'R[0-9][0-9]*'),
+    component_a       TEXT    NOT NULL,
+    component_b       TEXT    NOT NULL,
+    direction         TEXT    NOT NULL CHECK (direction IN ({_sql_list(RULE_DIRECTIONS)})),
+    type_label        TEXT    NOT NULL,
+    scope             TEXT    NOT NULL DEFAULT 'meal' CHECK (scope IN ({_sql_list(RULE_SCOPES)})),
+    trigger_condition TEXT    NOT NULL
+                              CHECK (CASE WHEN json_valid(trigger_condition)
+                                     THEN json_type(trigger_condition) = 'object' ELSE 0 END),
+    condition_text    TEXT    NOT NULL,
+    effect_text       TEXT    NOT NULL CHECK (length(trim(effect_text)) > 0),
+    limitation_text   TEXT,
+    suggestion_text   TEXT,
+    evidence_level    TEXT    NOT NULL CHECK (evidence_level IN ({_sql_list(EVIDENCE_LEVELS)})),
+    status            TEXT    NOT NULL DEFAULT 'review'
+                              CHECK (status IN ({_sql_list(RULE_STATUSES)})),
+    version           INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1),
+    reviewed_at       TEXT,
+    CHECK (component_a <> component_b),
+    CHECK (status <> 'active' OR reviewed_at IS NOT NULL)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS RuleSource (
+    rule_id         TEXT    NOT NULL REFERENCES InteractionRule(rule_id) ON DELETE CASCADE,
+    source_id       INTEGER NOT NULL REFERENCES Source(source_id) ON DELETE RESTRICT,
+    PRIMARY KEY (rule_id, source_id)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_rule_components ON InteractionRule(component_a, component_b);
+CREATE INDEX IF NOT EXISTS idx_rule_source_source ON RuleSource(source_id);
+
+CREATE TRIGGER IF NOT EXISTS trg_rule_insert_not_active
+BEFORE INSERT ON InteractionRule
+FOR EACH ROW WHEN NEW.status = 'active'
+BEGIN
+    SELECT RAISE(ABORT, 'Kural kaynak eklenmeden etkinleştirilemez');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_rule_activate_requires_source
+BEFORE UPDATE OF status ON InteractionRule
+FOR EACH ROW WHEN NEW.status = 'active'
+    AND NOT EXISTS (SELECT 1 FROM RuleSource WHERE rule_id = NEW.rule_id)
+BEGIN
+    SELECT RAISE(ABORT, 'Kural kaynak eklenmeden etkinleştirilemez');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_rule_keep_last_source
+BEFORE DELETE ON RuleSource
+FOR EACH ROW WHEN
+    (SELECT status FROM InteractionRule WHERE rule_id = OLD.rule_id) = 'active'
+    AND (SELECT COUNT(*) FROM RuleSource WHERE rule_id = OLD.rule_id) = 1
+BEGIN
+    SELECT RAISE(ABORT, 'Etkin kuralın son kaynağı silinemez');
+END;
+"""
+
 # Sonraki adımlarda eklenecek tablo grupları bu listeye sırayla eklenir.
-SCHEMA_PARTS: tuple[str, ...] = (FOOD_TABLES, PROFILE_TABLES, MEAL_TABLES)
+SCHEMA_PARTS: tuple[str, ...] = (FOOD_TABLES, PROFILE_TABLES, MEAL_TABLES, RULE_TABLES)
 
 
 def create_schema(conn: sqlite3.Connection) -> None:
